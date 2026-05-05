@@ -59,6 +59,17 @@ services:
       - ./uploads:/app/uploads
       - ./data:/app/data
 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://api:8000
+    depends_on:
+      - api
+
   nginx:
     image: nginx:1.25-alpine
     ports:
