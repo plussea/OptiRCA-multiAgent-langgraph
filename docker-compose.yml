@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: ankane/pgvector:v0.5.0
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -18,7 +18,7 @@ services:
       retries: 5
 
   redis:
-    image: redis:7-alpine
+    image: redis:8.8-m03-trixie
     ports:
       - "6379:6379"
     volumes:
@@ -30,7 +30,7 @@ services:
       retries: 5
 
   neo4j:
-    image: neo4j:5-community
+    image: neo4j:5.23-community
     environment:
       NEO4J_AUTH: neo4j/password
       NEO4J_PLUGINS: '["apoc"]'
@@ -41,7 +41,7 @@ services:
       - neo4j_data:/data
 
   api:
-    build: .
+    image: opti-rca-multi-agent-omniops:latest
     ports:
       - "8000:8000"
     environment:
@@ -59,8 +59,19 @@ services:
       - ./uploads:/app/uploads
       - ./data:/app/data
 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://api:8000
+    depends_on:
+      - api
+
   nginx:
-    image: nginx:alpine
+    image: nginx:1.25-alpine
     ports:
       - "80:80"
     volumes:

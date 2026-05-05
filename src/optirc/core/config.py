@@ -56,5 +56,10 @@ class Settings(BaseSettings):
     hitl_timeout_seconds: int = 600
     hitl_escalation_webhook_url: Optional[str] = None
 
+    # LangSmith Tracing
+    langsmith_api_key: Optional[str] = None
+    langsmith_project: str = "optirc-agent"
+    langsmith_tracing: bool = False
+
 
 settings = Settings()

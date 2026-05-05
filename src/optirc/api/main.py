@@ -10,6 +10,7 @@ from langgraph.types import Command
 
 from optirc.core.config import settings
 from optirc.core.state import OverallState
+from optirc.core.tracing import configure_langsmith_tracing
 from optirc.graphs.parent import build_optigraph, create_checkpointer
 from optirc.memory.db_store import db_store
 from optirc.memory.redis_store import redis_store
@@ -25,6 +26,7 @@ async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     global optigraph
     logging.basicConfig(level=getattr(logging, settings.log_level))
+    configure_langsmith_tracing()
     checkpointer = await create_checkpointer()
     optigraph = build_optigraph(checkpointer=checkpointer)
     await db_store._init()
