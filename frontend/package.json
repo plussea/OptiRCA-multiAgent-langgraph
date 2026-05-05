@@ -1,0 +1,8 @@
+{
+  "name": "optirc-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "echo 'Frontend not implemented yet' && sleep infinity"
+  }
+}
