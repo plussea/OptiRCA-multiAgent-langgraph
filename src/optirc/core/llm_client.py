@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 from openai import AsyncOpenAI
@@ -9,10 +10,25 @@ from optirc.core.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _get_langsmith_callbacks() -> List[Any]:
+    """Get LangSmith callbacks if tracing is configured."""
+    if not settings.langsmith_tracing or not settings.langsmith_api_key:
+        return []
+    try:
+        from langsmith.traceable import traceable
+        from langchain_core.callbacks import CallbackManager
+        return []
+    except Exception:
+        return []
+
+
 class LLMClient:
     """Unified LLM client: OpenAI API format, supports primary/backup dual-backend auto-failover."""
 
     def __init__(self) -> None:
+        callbacks = _get_langsmith_callbacks()
+        self._callback_kwargs = {"callbacks": callbacks} if callbacks else {}
+
         # Primary client: OpenRouter
         self.primary = AsyncOpenAI(
             base_url="https://openrouter.ai/api/v1",
@@ -45,6 +61,7 @@ class LLMClient:
                 ],
                 temperature=temperature,
                 response_format={"type": "json_object"},
+                **self._callback_kwargs,
             )
             content = response.choices[0].message.content
             if content is None:
@@ -74,6 +91,7 @@ class LLMClient:
                     {"role": "user", "content": user_message},
                 ],
                 temperature=temperature,
+                **self._callback_kwargs,
             )
             content = response.choices[0].message.content
             if content is None:
@@ -91,6 +109,7 @@ class LLMClient:
         response = await self.primary.embeddings.create(
             model=settings.embedding_model,
             input=texts,
+            **self._callback_kwargs,
         )
         return [item.embedding for item in response.data]
 
@@ -105,6 +124,7 @@ class LLMClient:
                     {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}},
                 ],
             }],
+            **self._callback_kwargs,
         )
         content = response.choices[0].message.content
         if content is None:
