@@ -21,6 +21,7 @@ class OverallState(TypedDict):
     pending_human: bool
     human_decision: Optional[str]
     error_message: Optional[str]
+    retry_count: int
     messages: Annotated[List[BaseMessage], add_messages]
 
 
