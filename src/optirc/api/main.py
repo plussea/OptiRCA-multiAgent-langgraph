@@ -1,11 +1,13 @@
 import logging
 import os
 import uuid
+import asyncio
 from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, File, Form, UploadFile, WebSocket, status
+from fastapi import FastAPI, File, Form, UploadFile, WebSocket, status, Depends
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from langgraph.types import Command
 
 from optirc.core.config import settings
@@ -26,12 +28,33 @@ logger = logging.getLogger(__name__)
 # Global graph instance
 optigraph: Optional[Any] = None
 
+# Security
+security = HTTPBearer(auto_error=False)
+
 # Allowed upload MIME types
 ALLOWED_CONTENT_TYPES = {
     "text/csv",
     "application/vnd.ms-excel",
     "application/csv",
 }
+
+# Concurrency semaphore to prevent resource exhaustion
+MAX_CONCURRENT_PIPELINES = 10
+_pipeline_semaphore = asyncio.Semaphore(MAX_CONCURRENT_PIPELINES)
+
+
+async def verify_token(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> str:
+    """Verify API token. In production, use proper JWT or OAuth2."""
+    # Simple token check - in production, validate against database or auth service
+    expected_token = os.environ.get("OMNIOPS_API_TOKEN", "")
+    if not expected_token:
+        # Development mode: no token required
+        return "dev"
+    if credentials is None:
+        raise SessionNotFoundError("Authentication required")
+    if credentials.credentials != expected_token:
+        raise SessionNotFoundError("Invalid authentication token")
+    return credentials.credentials
 
 
 def _validate_upload(file: UploadFile) -> None:
@@ -85,7 +108,10 @@ setup_exception_handlers(app)
 
 
 @app.post("/v1/sessions")
-async def create_session(file: UploadFile = File(...)):
+async def create_session(
+    file: UploadFile = File(...),
+    token: str = Depends(verify_token),
+):
     """Upload file and start diagnosis pipeline."""
     # Validate upload
     _validate_upload(file)
@@ -121,8 +147,21 @@ async def create_session(file: UploadFile = File(...)):
 
     # Start graph in background with semaphore-controlled concurrency
     config = {"configurable": {"thread_id": session_id}}
-    import asyncio
-    asyncio.create_task(optigraph.ainvoke(initial_state, config=config))
+
+    async def _run_pipeline():
+        async with _pipeline_semaphore:
+            try:
+                await optigraph.ainvoke(initial_state, config=config)
+            except Exception as e:
+                logger.error("Pipeline failed for session %s: %s", session_id, e)
+                # Update session with error status
+                await db_store.update_session(
+                    session_id,
+                    status="error",
+                    final_result={"error": str(e)},
+                )
+
+    asyncio.create_task(_run_pipeline())
 
     return JSONResponse({
         "session_id": session_id,
@@ -132,7 +171,7 @@ async def create_session(file: UploadFile = File(...)):
 
 
 @app.get("/v1/sessions/{session_id}")
-async def get_session(session_id: str):
+async def get_session(session_id: str, token: str = Depends(verify_token)):
     """Get session state."""
     config = {"configurable": {"thread_id": session_id}}
     try:
@@ -161,7 +200,7 @@ async def get_session(session_id: str):
 
 
 @app.get("/v1/sessions/{session_id}/review-package")
-async def get_review_package(session_id: str):
+async def get_review_package(session_id: str, token: str = Depends(verify_token)):
     """Get review package for human review."""
     config = {"configurable": {"thread_id": session_id}}
     try:
@@ -189,6 +228,7 @@ async def submit_human_decision(
     session_id: str,
     decision: str = Form(...),
     notes: str = Form(""),
+    token: str = Depends(verify_token),
 ):
     """Submit human decision to resume pipeline."""
     from optirc.core.exceptions import NoActiveInterruptError
@@ -228,7 +268,7 @@ async def submit_human_decision(
 
 
 @app.get("/v1/sessions/{session_id}/trace")
-async def get_trace(session_id: str):
+async def get_trace(session_id: str, token: str = Depends(verify_token)):
     """Get execution trace."""
     config = {"configurable": {"thread_id": session_id}}
     try:
@@ -254,6 +294,7 @@ async def get_trace(session_id: str):
 async def health():
     """Health check endpoint with detailed subsystem status."""
     from optirc.core.llm_client import llm_client
+    from optirc.core.circuit_breaker import circuit_registry
 
     checkpointer_type = type(optigraph.checkpointer).__name__ if optigraph else "unknown"
 
@@ -273,10 +314,29 @@ async def health():
     except Exception as e:
         llm_health = {"status": "error", "reason": str(e)}
 
+    # Circuit breaker metrics
+    circuit_metrics = circuit_registry.all_metrics()
+
+    # Database health
+    db_health = {"status": "unknown"}
+    try:
+        if db_store._initialized and db_store._pool is not None:
+            db_health = {"status": "healthy", "pool_size": db_store._pool.get_size()}
+        else:
+            db_health = {"status": "degraded", "reason": "Database not initialized"}
+    except Exception as e:
+        db_health = {"status": "error", "reason": str(e)}
+
     return JSONResponse({
         "status": "healthy",
         "checkpointer": checkpointer_type,
         "llm": llm_health,
+        "circuits": circuit_metrics,
+        "database": db_health,
+        "concurrency": {
+            "max_pipelines": MAX_CONCURRENT_PIPELINES,
+            "available_slots": _pipeline_semaphore._value,
+        },
     })
 
 
@@ -302,12 +362,42 @@ async def human_review_ws(websocket: WebSocket):
     """WebSocket for real-time human review notifications."""
     await websocket.accept()
     try:
+        # Send initial connection confirmation
+        await websocket.send_json({
+            "type": "connected",
+            "message": "WebSocket connected for real-time updates",
+        })
+
         while True:
-            # Simple ping-pong to keep connection alive
+            # Wait for client messages (ping/heartbeat)
             data = await websocket.receive_text()
-            await websocket.send_text(f"Echo: {data}")
-    except Exception:
+            if data == "ping":
+                await websocket.send_json({"type": "pong"})
+            elif data.startswith("subscribe:"):
+                session_id = data.split(":", 1)[1]
+                await websocket.send_json({
+                    "type": "subscribed",
+                    "session_id": session_id,
+                })
+            else:
+                await websocket.send_json({
+                    "type": "echo",
+                    "message": data,
+                })
+    except Exception as e:
+        logger.debug("WebSocket connection closed: %s", e)
         await websocket.close()
+
+
+@app.get("/v1/metrics")
+async def prometheus_metrics():
+    """Prometheus metrics endpoint."""
+    from optirc.core.metrics import metrics
+    content, content_type = metrics.get_prometheus_metrics()
+    return JSONResponse(
+        content=content.decode("utf-8"),
+        media_type=content_type,
+    )
 
 
 if __name__ == "__main__":
