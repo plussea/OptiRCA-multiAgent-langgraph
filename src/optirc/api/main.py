@@ -22,6 +22,7 @@ from optirc.core.tracing import configure_langsmith_tracing
 from optirc.graphs.parent import build_optigraph, create_checkpointer
 from optirc.memory.db_store import db_store
 from optirc.memory.redis_store import redis_store
+from optirc.api import kg_routes
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +106,9 @@ app = FastAPI(
 app.add_middleware(TraceIdMiddleware)
 app.add_middleware(RateLimitMiddleware, requests_per_minute=60, burst_size=10)
 setup_exception_handlers(app)
+
+# Register knowledge graph routes
+app.include_router(kg_routes.router)
 
 
 @app.post("/v1/sessions")
@@ -327,12 +331,22 @@ async def health():
     except Exception as e:
         db_health = {"status": "error", "reason": str(e)}
 
+    # Knowledge Graph health
+    kg_health = {"status": "unknown"}
+    try:
+        from optirc.knowledge.neo4j_client import neo4j_client
+        kg_result = await neo4j_client.query("RETURN 1 AS health")
+        kg_health = {"status": "healthy"} if kg_result else {"status": "degraded"}
+    except Exception as e:
+        kg_health = {"status": "degraded", "reason": str(e)}
+
     return JSONResponse({
         "status": "healthy",
         "checkpointer": checkpointer_type,
         "llm": llm_health,
         "circuits": circuit_metrics,
         "database": db_health,
+        "knowledge_graph": kg_health,
         "concurrency": {
             "max_pipelines": MAX_CONCURRENT_PIPELINES,
             "available_slots": _pipeline_semaphore._value,

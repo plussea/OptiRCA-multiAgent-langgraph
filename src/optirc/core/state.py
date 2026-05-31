@@ -28,6 +28,7 @@ class OverallState(TypedDict):
 # Perception subgraph
 class PerceptionInternalState(TypedDict):
     raw_input: str
+    input_type: Optional[str]
     detected_encoding: Optional[str]
     raw_rows: Optional[List[Dict[str, Any]]]
     normalized_headers: Optional[List[str]]

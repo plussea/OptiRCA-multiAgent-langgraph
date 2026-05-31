@@ -47,6 +47,7 @@ async def perception_node(state: OverallState) -> Dict[str, Any]:
     """Wrapper for perception subgraph."""
     sub_input: PerceptionInternalState = {
         "raw_input": state["raw_input"],
+        "input_type": None,
         "detected_encoding": None,
         "raw_rows": None,
         "normalized_headers": None,

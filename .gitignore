@@ -62,3 +62,18 @@ htmlcov/
 
 # Node
 node_modules/
+.worktrees/
+
+# Next.js build output
+.next/
+
+# IDE
+.claude/
+.cursor/
+.codegraph/
+
+# Environment
+.env
+
+# uv lock file (optional, can be committed but usually not needed)
+# uv.lock

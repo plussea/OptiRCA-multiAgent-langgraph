@@ -16,16 +16,17 @@ class Settings(BaseSettings):
     # Redis
     redis_url: str = "redis://localhost:6379/0"
 
-    # LLM Primary (OpenRouter)
+    # LLM Primary (ModelScope)
     llm_provider: str = "openrouter"
-    llm_model: str = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+    llm_model: str = "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B"
+    llm_base_url: str = "https://api-inference.modelscope.cn/v1"
     openrouter_api_key: str = ""
 
-    # LLM Backup (ModelScope)
+    # LLM Backup (OpenRouter)
     llm_backup_provider: str = "openrouter"
-    llm_backup_model: str = "MiniMax/MiniMax-M2.7"
+    llm_backup_model: str = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
     llm_backup_api_key: str = ""
-    llm_backup_base_url: str = "https://api-inference.modelscope.cn/v1"
+    llm_backup_base_url: str = "https://openrouter.ai/api/v1"
 
     # OCR
     ocr_api_key: str = ""
@@ -33,7 +34,7 @@ class Settings(BaseSettings):
 
     # Embedding
     embedding_api_key: str = ""
-    embedding_model: str = "nvidia/llama-nemotron-embed-vl-1b-v2:free"
+    embedding_model: str = "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B"
 
     # Vector Database
     chroma_persistent_path: str = "./data/chroma"

@@ -7,6 +7,8 @@ from langgraph.graph import END, StateGraph
 
 from optirc.core.llm_client import llm_client
 from optirc.core.state import ClosureInternalState
+from optirc.knowledge.builder import graph_builder
+from optirc.knowledge.extractor import knowledge_extractor
 from optirc.knowledge.kg_query import kg_query_service
 from optirc.rag.vector_store import vector_store
 
@@ -19,7 +21,7 @@ Output JSON with:
 
 
 def extract_knowledge_node(state: ClosureInternalState) -> Dict[str, Any]:
-    """Extract structured knowledge from case."""
+    """Extract structured knowledge from case using hybrid approach."""
     full_case = state["full_case"]
     items: List[Dict[str, Any]] = []
 
@@ -59,22 +61,48 @@ async def store_vector_node(state: ClosureInternalState) -> Dict[str, Any]:
 
 
 async def store_graph_node(state: ClosureInternalState) -> Dict[str, Any]:
-    """Store knowledge to graph database."""
+    """Store knowledge to graph database using the new extraction engine."""
     full_case = state["full_case"]
     session_id = state["session_id"]
     diagnosis = full_case.get("diagnosis", {})
+    perception = full_case.get("perception", {})
+    planning = full_case.get("planning", {})
     root_cause = diagnosis.get("root_cause", "")
-    topology_ids = full_case.get("perception", {}).get("topology_ids", [])
 
-    if not root_cause:
+    if not root_cause or root_cause == "unknown":
         return {"stored_to_graph_db": False}
 
     try:
-        await kg_query_service.add_case_knowledge(
+        # ── New: Use knowledge extractor for rich entity/relationship extraction ──
+        extracted = await knowledge_extractor.extract_from_case(
             session_id=session_id,
-            root_cause=root_cause,
-            device_ids=topology_ids,
+            perception=perception,
+            diagnosis=diagnosis,
+            planning=planning,
         )
+
+        # Build graph from extraction
+        build_result = await graph_builder.build_from_extraction(
+            entities=extracted.entities,
+            relationships=extracted.relationships,
+        )
+
+        logger.info(
+            "Graph build result for session %s: %s entities, %s relationships",
+            session_id,
+            build_result["entities"].get("created", 0),
+            build_result["relationships"].get("created", 0),
+        )
+
+        # Also store legacy format for backward compatibility
+        topology_ids = perception.get("topology_ids", [])
+        if topology_ids:
+            await kg_query_service.add_case_knowledge(
+                session_id=session_id,
+                root_cause=root_cause,
+                device_ids=topology_ids,
+            )
+
         return {"stored_to_graph_db": True}
     except Exception as e:
         logger.warning("Graph store failed: %s", e)
