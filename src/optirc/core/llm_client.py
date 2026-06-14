@@ -10,6 +10,7 @@ Key features:
 
 import json
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 from openai import AsyncOpenAI, APIError, RateLimitError, APITimeoutError
@@ -123,11 +124,26 @@ class LLMClient:
             quota_limiter=QuotaLimiter(requests_per_minute=60),
         )
 
-        # Embedding provider (uses primary base URL with embedding API key)
+        # OCR provider (separate from primary — DeepSeek is text-only, point at OpenRouter)
+        ocr_base_url = (
+            os.environ.get("OCR_BASE_URL")
+            or "https://openrouter.ai/api/v1"
+        )
+        self.ocr_client = AsyncOpenAI(
+            base_url=ocr_base_url,
+            api_key=settings.ocr_api_key or settings.openrouter_api_key,
+            timeout=45.0,
+        )
+
+        # Embedding provider (DeepSeek has no embeddings endpoint — fall back to OpenRouter)
+        embed_base_url = (
+            os.environ.get("EMBEDDING_BASE_URL")
+            or "https://openrouter.ai/api/v1"
+        )
         self.embedding = LLMProvider(
             name="embedding",
             client=AsyncOpenAI(
-                base_url=settings.llm_base_url or "https://api-inference.modelscope.cn/v1",
+                base_url=embed_base_url,
                 api_key=settings.embedding_api_key or settings.openrouter_api_key,
                 timeout=30.0,
             ),
@@ -407,7 +423,7 @@ class LLMClient:
         await self.primary.quota.acquire()
 
         try:
-            response = await self.primary.client.chat.completions.create(
+            response = await self.ocr_client.chat.completions.create(
                 model=settings.ocr_model,
                 messages=[{
                     "role": "user",

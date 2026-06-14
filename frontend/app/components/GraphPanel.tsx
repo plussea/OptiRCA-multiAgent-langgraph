@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ReactFlow,
   Background,
@@ -8,8 +8,16 @@ import {
   type Node,
   type Edge,
   MarkerType,
+  ReactFlowProvider,
 } from "@xyflow/react";
 import dagre from "dagre";
+import {
+  ArrowDown,
+  GripVertical,
+  RotateCcw,
+  Save,
+  Sparkles,
+} from "lucide-react";
 import "@xyflow/react/dist/style.css";
 
 import { OptiNode } from "./GraphNode";
@@ -147,6 +155,13 @@ const SUBGRAPH_DEFS: Record<
 
 // ── Layout helper ─────────────────────────────────────────────────────────────
 
+// Sizing for the auto-layout pass. The user can later drag nodes to any
+// position they like; their custom positions override this baseline.
+const NODE_W = 220;
+const NODE_H = 88;
+const RANK_SEP = 110; // vertical gap between ranks
+const NODE_SEP = 36;  // horizontal gap between sibling nodes
+
 function getLayoutedElements(
   nodes: Node[],
   edges: Edge[],
@@ -154,16 +169,23 @@ function getLayoutedElements(
 ): { nodes: Node[]; edges: Edge[] } {
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir, ranker: "tight-tree" });
+  g.setGraph({
+    rankdir,
+    ranker: "tight-tree",
+    ranksep: RANK_SEP,
+    nodesep: NODE_SEP,
+    marginx: 40,
+    marginy: 40,
+  });
 
-  nodes.forEach((n) => g.setNode(n.id, { width: 180, height: 70 }));
+  nodes.forEach((n) => g.setNode(n.id, { width: NODE_W, height: NODE_H }));
   edges.forEach((e) => g.setEdge(e.source, e.target));
 
   dagre.layout(g);
 
   const layouted = nodes.map((n) => {
     const { x, y } = g.node(n.id);
-    return { ...n, position: { x, y } };
+    return { ...n, position: { x: x - NODE_W / 2, y: y - NODE_H / 2 } };
   });
 
   return { nodes: layouted, edges };
@@ -197,26 +219,83 @@ function deriveNodeStatus(
   return "pending";
 }
 
+// ── Local-storage helpers for persisted user layouts ──────────────────────────
+
+const LAYOUT_KEY = (view: string) => `optirc:layout:${view}`;
+
+type PositionMap = Record<string, { x: number; y: number }>;
+
+function loadSavedPositions(view: string): PositionMap {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(LAYOUT_KEY(view));
+    return raw ? (JSON.parse(raw) as PositionMap) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveSavedPositions(view: string, positions: PositionMap) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(LAYOUT_KEY(view), JSON.stringify(positions));
+  } catch {
+    // ignore quota errors — non-critical
+  }
+}
+
+function clearSavedPositions(view: string) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(LAYOUT_KEY(view));
+  } catch {
+    /* noop */
+  }
+}
+
 // ── GraphPanel ───────────────────────────────────────────────────────────────
 
 const nodeTypes = { opti: OptiNode };
 const edgeTypes = { opti: OptiEdge };
 
 export function GraphPanel() {
+  return (
+    <ReactFlowProvider>
+      <GraphPanelInner />
+    </ReactFlowProvider>
+  );
+}
+
+function GraphPanelInner() {
   const { status, activeNode, completedNodes, hitlRequired, sessionState, setActiveNode } =
     useSessionStore();
 
   const [currentSubgraph, setCurrentSubgraph] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
 
-  const activeParentId = STATUS_MAP[status] || null;
+  const viewKey = currentSubgraph ?? "parent";
 
+  // Pulled-back state from the underlying React Flow instance so the user can
+  // re-run "auto layout" or "reset" without losing their custom arrangement.
+  const [userPositions, setUserPositions] = useState<PositionMap>({});
+  const [hasUserLayout, setHasUserLayout] = useState(false);
+  const [, forceTick] = useState(0);
+  const rerender = useCallback(() => forceTick((n) => n + 1), []);
+
+  // Load saved positions whenever the view changes
+  useEffect(() => {
+    const saved = loadSavedPositions(viewKey);
+    setUserPositions(saved);
+    setHasUserLayout(Object.keys(saved).length > 0);
+  }, [viewKey]);
+
+  const activeParentId = STATUS_MAP[status] || null;
   const subgraphDef = currentSubgraph ? SUBGRAPH_DEFS[currentSubgraph] : null;
 
-  // Build nodes for current view
-  const nodes = useMemo((): Node[] => {
+  // Compute the auto-laid-out baseline once per view
+  const baseLayout = useMemo(() => {
     if (subgraphDef) {
-      const { nodes: n, edges: e } = getLayoutedElements(
+      const layouted = getLayoutedElements(
         subgraphDef.nodes.map((n) => ({
           id: n.id,
           type: "opti",
@@ -237,7 +316,7 @@ export function GraphPanel() {
         })),
         "TB",
       );
-      return n;
+      return { nodes: layouted.nodes, edges: layouted.edges };
     }
 
     const { nodes: n } = getLayoutedElements(
@@ -255,11 +334,19 @@ export function GraphPanel() {
       [],
       "TB",
     );
-    return n;
+    return { nodes: n, edges: [] as Edge[] };
   }, [currentSubgraph, subgraphDef, activeParentId, completedNodes, hitlRequired, status]);
 
-  // Build edges for parent view
-  const edges = useMemo((): Edge[] => {
+  // Overlay the user's saved/dragged positions on top of the baseline
+  const nodes = useMemo<Node[]>(() => {
+    if (!hasUserLayout) return baseLayout.nodes;
+    return baseLayout.nodes.map((n) => {
+      const override = userPositions[n.id];
+      return override ? { ...n, position: override } : n;
+    });
+  }, [baseLayout, userPositions, hasUserLayout]);
+
+  const edges = useMemo<Edge[]>(() => {
     if (subgraphDef) {
       return subgraphDef.edges.map((e) => ({
         id: e.id,
@@ -267,7 +354,7 @@ export function GraphPanel() {
         target: e.target,
         type: "opti",
         data: { isActive: false },
-        markerEnd: { type: MarkerType.ArrowClosed, color: "#d1d5db" },
+        markerEnd: { type: MarkerType.ArrowClosed, color: "#94a3b8" },
       }));
     }
 
@@ -289,11 +376,52 @@ export function GraphPanel() {
         style: e.isDashed ? { strokeDasharray: "5,5" } : undefined,
         markerEnd: {
           type: MarkerType.ArrowClosed,
-          color: isActive ? "#3b82f6" : "#d1d5db",
+          color: isActive ? "#3b82f6" : "#94a3b8",
         },
       };
     });
-  }, [currentSubgraph, subgraphDef, activeParentId]);
+  }, [subgraphDef, activeParentId]);
+
+  // Capture the final resting position of every drag
+  const onNodeDragStop = useCallback(
+    (_: React.MouseEvent, node: Node) => {
+      setUserPositions((prev) => {
+        const next = { ...prev, [node.id]: { x: node.position.x, y: node.position.y } };
+        saveSavedPositions(viewKey, next);
+        return next;
+      });
+      setHasUserLayout(true);
+    },
+    [viewKey],
+  );
+
+  // Continuous tracking of position while dragging (also persists partial
+  // movement so the user sees their own updates reflected immediately)
+  const onNodeDrag = useCallback(
+    (_: React.MouseEvent, node: Node) => {
+      setUserPositions((prev) => ({ ...prev, [node.id]: { x: node.position.x, y: node.position.y } }));
+    },
+    [],
+  );
+
+  const handleAutoLayout = useCallback(() => {
+    setUserPositions({});
+    setHasUserLayout(false);
+    clearSavedPositions(viewKey);
+    // Re-fit the view a tick later so ReactFlow has fresh positions
+    requestAnimationFrame(() => rerender());
+  }, [viewKey, rerender]);
+
+  const handleResetAll = useCallback(() => {
+    setUserPositions({});
+    setHasUserLayout(false);
+    clearSavedPositions(viewKey);
+    rerender();
+  }, [viewKey, rerender]);
+
+  const handleSaveLayout = useCallback(() => {
+    saveSavedPositions(viewKey, userPositions);
+  }, [viewKey, userPositions]);
 
   const handleExpand = useCallback((nodeId: string) => {
     setCurrentSubgraph(nodeId);
@@ -312,13 +440,54 @@ export function GraphPanel() {
   return (
     <div className="flex flex-col h-full bg-background">
       {/* Toolbar */}
-      <div className="flex items-center gap-3 px-4 py-2 border-b border-border">
+      <div className="flex items-center gap-3 px-4 py-2 border-b border-border bg-gradient-to-b from-background to-muted/30">
         <SubgraphBreadcrumbs
           currentSubgraph={currentSubgraph}
           onNavigate={setCurrentSubgraph}
         />
 
         <div className="ml-auto flex items-center gap-2">
+          {/* Status pill */}
+          <div className="hidden md:flex items-center gap-1.5 text-xs text-muted-foreground mr-2">
+            <ArrowDown className="w-3.5 h-3.5" />
+            <span>纵向链路 · 可拖拽</span>
+            {hasUserLayout && (
+              <span className="ml-1 inline-flex items-center gap-1 rounded-full bg-emerald-100 text-emerald-700 px-2 py-0.5 text-[10px] font-medium">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                已自定义布局
+              </span>
+            )}
+          </div>
+
+          <button
+            onClick={handleAutoLayout}
+            className="inline-flex items-center gap-1 text-xs border border-border rounded-lg px-2.5 py-1 bg-background hover:bg-muted transition-colors"
+            title="重新整理为默认纵向布局"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            自动布局
+          </button>
+
+          <button
+            onClick={handleSaveLayout}
+            className="inline-flex items-center gap-1 text-xs border border-border rounded-lg px-2.5 py-1 bg-background hover:bg-muted transition-colors"
+            title="保存当前节点位置"
+          >
+            <Save className="w-3.5 h-3.5" />
+            保存
+          </button>
+
+          <button
+            onClick={handleResetAll}
+            className="inline-flex items-center gap-1 text-xs border border-border rounded-lg px-2.5 py-1 bg-background hover:bg-muted transition-colors"
+            title="清除自定义位置"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            重置
+          </button>
+
+          <div className="w-px h-5 bg-border mx-1" />
+
           <select
             value={currentSubgraph ?? "parent"}
             onChange={(e) => setCurrentSubgraph(e.target.value === "parent" ? null : e.target.value)}
@@ -334,34 +503,51 @@ export function GraphPanel() {
       </div>
 
       {/* ReactFlow Canvas */}
-      <div className="flex-1">
+      <div className="flex-1 relative">
+        <DragHint />
+
         <ReactFlow
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
+          // Vertical flow, top → bottom
+          defaultEdgeOptions={{ type: "smoothstep" }}
           fitView
-          fitViewOptions={{ padding: 0.3 }}
-          minZoom={0.3}
+          fitViewOptions={{ padding: 0.25, includeHiddenNodes: false }}
+          minZoom={0.25}
           maxZoom={2}
+          nodesDraggable
+          nodesConnectable={false}
+          elementsSelectable
+          panOnDrag
+          zoomOnScroll
           onNodeClick={(_, node) => {
             setSelectedNode(node.id);
             setActiveNode(node.id);
           }}
+          onNodeDrag={onNodeDrag}
+          onNodeDragStop={onNodeDragStop}
           proOptions={{ hideAttribution: true }}
         >
-          <Background />
-          <Controls className="!bottom-4 !left-4" />
+          <Background gap={24} size={1.4} color="#e2e8f0" />
+          <Controls
+            className="!bottom-4 !left-4"
+            showInteractive={false}
+          />
           <MiniMap
             className="!bottom-4 !right-4"
+            pannable
+            zoomable
             nodeColor={(n) => {
               const s = n.data?.status as NodeStatus;
               if (s === "completed") return "#10b981";
               if (s === "running") return "#3b82f6";
               if (s === "error") return "#ef4444";
               if (s === "interrupted") return "#f59e0b";
-              return "#d1d5db";
+              return "#cbd5e1";
             }}
+            maskColor="rgba(148, 163, 184, 0.12)"
           />
         </ReactFlow>
       </div>
@@ -375,6 +561,19 @@ export function GraphPanel() {
           onClose={() => setSelectedNode(null)}
         />
       )}
+    </div>
+  );
+}
+
+// ── Floating hint that explains the new interaction model ────────────────────
+
+function DragHint() {
+  return (
+    <div className="pointer-events-none absolute top-3 left-1/2 -translate-x-1/2 z-10">
+      <div className="flex items-center gap-1.5 rounded-full border border-border bg-background/80 backdrop-blur px-3 py-1 text-[11px] text-muted-foreground shadow-sm">
+        <GripVertical className="w-3 h-3" />
+        拖动顶部手柄可自由摆放节点
+      </div>
     </div>
   );
 }

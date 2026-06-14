@@ -78,8 +78,20 @@ async def analyze_node(state: DiagnosisInternalState) -> Dict[str, Any]:
     docs_text = "\n".join([d.get("content", "") for d in retrieved_docs])
     kg_text = json.dumps(kg_subgraph, ensure_ascii=False, indent=2)
 
+    # Surface the unique alarm types list (if perception found it) so the
+    # LLM can see the spread of faults — useful for "many MUT_LOS at the
+    # same time → likely optical fiber break" reasoning.
+    unique_alarm_types = summary.get("unique_alarm_types") or []
+    first_row = summary.get("first_row") or {}
+
     user_message = f"""Perception Summary:
 {json.dumps(summary, ensure_ascii=False, indent=2)}
+
+Unique alarm types observed ({len(unique_alarm_types)}):
+{chr(10).join(f"- {a}" for a in unique_alarm_types) or "(none — fallback to raw_rows)"}
+
+First alarm row (raw, original headers):
+{json.dumps(first_row, ensure_ascii=False, indent=2)}
 
 Retrieved Documents:
 {docs_text}

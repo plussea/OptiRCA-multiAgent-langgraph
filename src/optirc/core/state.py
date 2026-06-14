@@ -32,6 +32,7 @@ class PerceptionInternalState(TypedDict):
     detected_encoding: Optional[str]
     raw_rows: Optional[List[Dict[str, Any]]]
     normalized_headers: Optional[List[str]]
+    header_aliases: Optional[Dict[str, str]]
     topology_ids: Optional[List[str]]
     ocr_text: Optional[str]
     perception_summary: Optional[Dict[str, Any]]

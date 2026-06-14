@@ -51,6 +51,7 @@ async def perception_node(state: OverallState) -> Dict[str, Any]:
         "detected_encoding": None,
         "raw_rows": None,
         "normalized_headers": None,
+        "header_aliases": None,
         "topology_ids": None,
         "ocr_text": None,
         "perception_summary": None,

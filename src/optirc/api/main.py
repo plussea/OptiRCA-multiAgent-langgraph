@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, File, Form, UploadFile, WebSocket, status, Depends
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from langgraph.types import Command
@@ -100,6 +101,24 @@ app = FastAPI(
     title="OptiRCAgent API",
     version="0.1.0",
     lifespan=lifespan,
+)
+
+# CORS — allow the local Next dev server (3000) and any origin in dev. In
+# production this should be locked down to the deployed frontend host.
+_DEFAULT_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:8090",
+    "http://127.0.0.1:8090",
+]
+_extra = os.environ.get("CORS_ALLOWED_ORIGINS", "")
+_allowed_origins = _DEFAULT_ORIGINS + [o.strip() for o in _extra.split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Register middleware and exception handlers
