@@ -35,6 +35,8 @@ class RedisStore:
             return await self._client.get(key)
         except Exception as e:
             logger.warning("Redis get failed: %s", e)
+            self._client = None  # Force reconnection on next call
+            self._initialized = False
             return None
 
     async def set(self, key: str, value: str, ttl: int = 60) -> None:
@@ -45,6 +47,8 @@ class RedisStore:
             await self._client.setex(key, ttl, value)
         except Exception as e:
             logger.warning("Redis set failed: %s", e)
+            self._client = None
+            self._initialized = False
 
     async def publish(self, channel: str, message: str) -> None:
         self._init()
@@ -54,6 +58,8 @@ class RedisStore:
             await self._client.publish(channel, message)
         except Exception as e:
             logger.warning("Redis publish failed: %s", e)
+            self._client = None
+            self._initialized = False
 
     async def get_session_state(self, session_id: str) -> Optional[Dict[str, Any]]:
         raw = await self.get(f"session:{session_id}")

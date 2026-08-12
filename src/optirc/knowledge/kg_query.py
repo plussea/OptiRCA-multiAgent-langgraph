@@ -21,7 +21,7 @@ class KGQueryService:
             try:
                 # Query nodes
                 node_results = await neo4j_client.query(
-                    "MATCH (n {topology_id: $topology_id}) RETURN n LIMIT 50",
+                    "MATCH (n) WHERE n.topology_id = $topology_id RETURN n LIMIT 50",
                     {"topology_id": topo_id},
                 )
                 for r in node_results:
@@ -34,10 +34,11 @@ class KGQueryService:
                 # Query relationships up to depth
                 rel_results = await neo4j_client.query(
                     """
-                    MATCH (n {topology_id: $topology_id})-[r*1..$depth]-(m)
+                    MATCH (n)-[r*1..""" + str(depth) + """]-(m)
+                    WHERE n.topology_id = $topology_id
                     RETURN n, r, m LIMIT 100
                     """,
-                    {"topology_id": topo_id, "depth": depth},
+                    {"topology_id": topo_id},
                 )
                 for r in rel_results:
                     rel_list = r.get("r", [])

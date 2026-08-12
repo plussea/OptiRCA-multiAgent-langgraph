@@ -3,6 +3,37 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "echo 'Frontend not implemented yet' && sleep infinity"
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "next": "14.2.3",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "@xyflow/react": "^12.3.0",
+    "dagre": "^0.8.5",
+    "zustand": "^4.5.2",
+    "framer-motion": "^11.1.7",
+    "axios": "^1.6.8",
+    "socket.io-client": "^4.7.5",
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^2.3.0",
+    "class-variance-authority": "^0.7.0",
+    "lucide-react": "^0.378.0",
+    "date-fns": "^3.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.7",
+    "@types/react": "^18.3.1",
+    "@types/react-dom": "^18.3.0",
+    "@types/dagre": "^0.7.52",
+    "typescript": "^5.4.5",
+    "tailwindcss": "^3.4.3",
+    "postcss": "^8.4.38",
+    "autoprefixer": "^10.4.19",
+    "eslint": "^8.57.0",
+    "eslint-config-next": "14.2.3"
   }
 }

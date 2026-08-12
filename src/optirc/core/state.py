@@ -21,15 +21,18 @@ class OverallState(TypedDict):
     pending_human: bool
     human_decision: Optional[str]
     error_message: Optional[str]
+    retry_count: int
     messages: Annotated[List[BaseMessage], add_messages]
 
 
 # Perception subgraph
 class PerceptionInternalState(TypedDict):
     raw_input: str
+    input_type: Optional[str]
     detected_encoding: Optional[str]
     raw_rows: Optional[List[Dict[str, Any]]]
     normalized_headers: Optional[List[str]]
+    header_aliases: Optional[Dict[str, str]]
     topology_ids: Optional[List[str]]
     ocr_text: Optional[str]
     perception_summary: Optional[Dict[str, Any]]

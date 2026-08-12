@@ -1,5 +1,6 @@
 import json
 import logging
+import asyncio
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -11,25 +12,59 @@ logger = logging.getLogger(__name__)
 
 
 class DBStore:
-    """PostgreSQL async persistence layer."""
+    """PostgreSQL async persistence layer with connection health checks."""
 
     def __init__(self) -> None:
         self._pool: Optional[asyncpg.Pool] = None
         self._initialized = False
+        self._health_check_interval = 30.0
+        self._last_health_check: Optional[float] = None
 
     async def _init(self) -> None:
-        if self._initialized:
-            return
+        if self._initialized and self._pool is not None:
+            # Check if pool is still healthy
+            if await self._health_check():
+                return
+            # Pool unhealthy, try to recreate
+            logger.warning("PostgreSQL pool unhealthy, attempting reconnection")
+            await self.close()
+
         try:
             dsn = settings.database_url.replace("postgresql+asyncpg://", "postgresql://")
-            self._pool = await asyncpg.create_pool(dsn, min_size=1, max_size=10)
+            self._pool = await asyncpg.create_pool(
+                dsn,
+                min_size=1,
+                max_size=10,
+                command_timeout=30,
+                server_settings={
+                    "application_name": "optirc_agent",
+                },
+            )
             self._initialized = True
+            self._last_health_check = asyncio.get_event_loop().time()
             logger.info("PostgreSQL pool initialized")
             await self._ensure_tables()
         except Exception as e:
             logger.warning("PostgreSQL init failed: %s", e)
             self._pool = None
             self._initialized = True
+
+    async def _health_check(self) -> bool:
+        """Check if the connection pool is healthy."""
+        if self._pool is None:
+            return False
+        if self._last_health_check is not None:
+            elapsed = asyncio.get_event_loop().time() - self._last_health_check
+            if elapsed < self._health_check_interval:
+                return True  # Skip check if recently checked
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.execute("SELECT 1")
+            self._last_health_check = asyncio.get_event_loop().time()
+            return True
+        except Exception as e:
+            logger.warning("PostgreSQL health check failed: %s", e)
+            return False
 
     async def _ensure_tables(self) -> None:
         if self._pool is None:

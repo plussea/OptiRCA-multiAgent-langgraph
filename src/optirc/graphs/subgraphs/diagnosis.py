@@ -4,6 +4,8 @@ from typing import Any, Dict, List, Optional
 
 from langgraph.graph import END, StateGraph
 
+from optirc.core.error_handlers import safe_node
+from optirc.core.exceptions import KnowledgeGraphError, VectorStoreError
 from optirc.core.llm_client import llm_client
 from optirc.core.state import DiagnosisInternalState
 from optirc.knowledge.kg_query import kg_query_service
@@ -21,6 +23,13 @@ reason step by step and output a JSON object with these keys:
 - evidence: list of evidence strings
 - recommended_action: brief recommended action string
 """
+
+DIAGNOSIS_FALLBACK = {
+    "root_cause": "unknown",
+    "confidence": 0.0,
+    "evidence": [],
+    "recommended_action": "manual investigation required",
+}
 
 
 def build_query_node(state: DiagnosisInternalState) -> Dict[str, Any]:
@@ -42,8 +51,9 @@ async def retrieve_rag_node(state: DiagnosisInternalState) -> Dict[str, Any]:
         docs = await vector_store.search(query_text, top_k=5)
         return {"retrieved_docs": docs}
     except Exception as e:
-        logger.warning("RAG retrieval failed: %s", e)
-        return {"retrieved_docs": []}
+        raise VectorStoreError(f"RAG retrieval failed: {e}") from e
+
+retrieve_rag_node = safe_node(retrieve_rag_node, error_status="diagnosed", fallback_value={"retrieved_docs": []})
 
 
 async def retrieve_kg_node(state: DiagnosisInternalState) -> Dict[str, Any]:
@@ -54,8 +64,9 @@ async def retrieve_kg_node(state: DiagnosisInternalState) -> Dict[str, Any]:
         subgraph = await kg_query_service.get_subgraph(topology_ids, depth=2)
         return {"kg_subgraph": subgraph}
     except Exception as e:
-        logger.warning("KG retrieval failed: %s", e)
-        return {"kg_subgraph": {"nodes": [], "relationships": []}}
+        raise KnowledgeGraphError(f"KG retrieval failed: {e}") from e
+
+retrieve_kg_node = safe_node(retrieve_kg_node, error_status="diagnosed", fallback_value={"kg_subgraph": {"nodes": [], "relationships": []}})
 
 
 async def analyze_node(state: DiagnosisInternalState) -> Dict[str, Any]:
@@ -67,8 +78,20 @@ async def analyze_node(state: DiagnosisInternalState) -> Dict[str, Any]:
     docs_text = "\n".join([d.get("content", "") for d in retrieved_docs])
     kg_text = json.dumps(kg_subgraph, ensure_ascii=False, indent=2)
 
+    # Surface the unique alarm types list (if perception found it) so the
+    # LLM can see the spread of faults — useful for "many MUT_LOS at the
+    # same time → likely optical fiber break" reasoning.
+    unique_alarm_types = summary.get("unique_alarm_types") or []
+    first_row = summary.get("first_row") or {}
+
     user_message = f"""Perception Summary:
 {json.dumps(summary, ensure_ascii=False, indent=2)}
+
+Unique alarm types observed ({len(unique_alarm_types)}):
+{chr(10).join(f"- {a}" for a in unique_alarm_types) or "(none — fallback to raw_rows)"}
+
+First alarm row (raw, original headers):
+{json.dumps(first_row, ensure_ascii=False, indent=2)}
 
 Retrieved Documents:
 {docs_text}
@@ -76,36 +99,26 @@ Retrieved Documents:
 Knowledge Graph Subgraph:
 {kg_text}
 """
-    try:
-        result = await llm_client.generate_json(
-            system=DIAGNOSIS_SYSTEM_PROMPT,
-            user_message=user_message,
-            temperature=0.2,
-        )
-        return {
-            "candidate_causes": result.get("candidate_causes", []),
-            "reasoning_chain": result.get("reasoning_chain", ""),
-            "llm_raw_output": json.dumps(result, ensure_ascii=False),
-        }
-    except Exception as e:
-        logger.warning("LLM diagnosis analysis failed: %s", e)
-        return {
-            "candidate_causes": [],
-            "reasoning_chain": "",
-            "llm_raw_output": "",
-        }
+    result = await llm_client.generate_json(
+        system=DIAGNOSIS_SYSTEM_PROMPT,
+        user_message=user_message,
+        temperature=0.2,
+        use_fallback=True,
+    )
+    return {
+        "candidate_causes": result.get("candidate_causes", []),
+        "reasoning_chain": result.get("reasoning_chain", ""),
+        "llm_raw_output": json.dumps(result, ensure_ascii=False),
+    }
+
+analyze_node = safe_node(analyze_node, error_status="diagnosed", fallback_value={"candidate_causes": [], "reasoning_chain": ""})
 
 
 def finalize_node(state: DiagnosisInternalState) -> Dict[str, Any]:
     """Finalize diagnosis result."""
     candidate_causes = state.get("candidate_causes") or []
     if not candidate_causes:
-        return {
-            "root_cause": "unknown",
-            "confidence": 0.0,
-            "evidence": [],
-            "recommended_action": "manual investigation required",
-        }
+        return DIAGNOSIS_FALLBACK
 
     # Pick best candidate
     best = max(candidate_causes, key=lambda x: x.get("confidence_score", 0))

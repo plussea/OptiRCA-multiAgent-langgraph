@@ -47,9 +47,11 @@ async def perception_node(state: OverallState) -> Dict[str, Any]:
     """Wrapper for perception subgraph."""
     sub_input: PerceptionInternalState = {
         "raw_input": state["raw_input"],
+        "input_type": None,
         "detected_encoding": None,
         "raw_rows": None,
         "normalized_headers": None,
+        "header_aliases": None,
         "topology_ids": None,
         "ocr_text": None,
         "perception_summary": None,
@@ -108,6 +110,7 @@ async def diagnosis_validation_node(state: OverallState) -> Dict[str, Any]:
             "suggested_action": result.get("suggested_action"),
         },
         "status": "diagnosis_validated",
+        "retry_count": state.get("retry_count", 0) + 1,
     }
 
 
@@ -212,10 +215,16 @@ async def closure_node(state: OverallState) -> Dict[str, Any]:
 
 
 # Conditional edge routing functions
+MAX_RETRIES = 3
+
 def route_diagnosis_validation(state: OverallState) -> str:
     """Route after diagnosis validation."""
     result = state.get("diagnosis_validation_result") or {}
     action = result.get("suggested_action", "retry_diagnosis")
+    retry_count = state.get("retry_count", 0)
+    
+    if action == "retry_diagnosis" and retry_count >= MAX_RETRIES:
+        return "human_review"
     if action == "proceed":
         return "planning"
     elif action == "retry_diagnosis":
@@ -226,7 +235,9 @@ def route_diagnosis_validation(state: OverallState) -> str:
 def route_solution_validation(state: OverallState) -> str:
     """Route after solution validation."""
     result = state.get("solution_validation_result") or {}
-    if result.get("needs_replan"):
+    retry_count = state.get("retry_count", 0)
+    
+    if result.get("needs_replan") and retry_count < MAX_RETRIES:
         return "planning"
     return "human_review"
 
