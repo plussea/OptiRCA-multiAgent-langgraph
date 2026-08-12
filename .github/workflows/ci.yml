@@ -28,7 +28,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install dependencies
-        run: uv sync --dev
+        run: uv sync --dev --extra dev
 
       - name: Run black
         run: uv run black --check src/ tests/
@@ -91,7 +91,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install dependencies
-        run: uv sync --dev
+        run: uv sync --dev --extra dev
 
       - name: Run tests with coverage
         run: uv run pytest tests/ --cov=src --cov-report=xml --cov-report=term
